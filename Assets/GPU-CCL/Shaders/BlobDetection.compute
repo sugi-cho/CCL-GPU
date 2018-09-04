@@ -2,6 +2,7 @@
 #pragma kernel updateLabel
 #pragma kernel margeLabel
 #pragma kernel margeBoundary
+#pragma kernel edging
 #pragma kernel clearLabelFlag
 #pragma kernel setLabelFlag
 #pragma kernel countLabel
@@ -85,6 +86,25 @@ void margeBoundary(uint3 id : SV_DispatchThreadID)
         if (label < oldLabel)
             OutTex[labeledIdx] = label;
     }
+}
+
+[numthreads(8,8,1)]
+void edging(uint3 id : SV_DispatchThreadID)
+{
+    uint2 idx = id.xy;
+    int label = InTex[idx];
+    if (0 < label)
+    {
+        int count = 0;
+        for (int y = 0; y < 3; y++)
+            for (int x = 0; x < 3; x++)
+            {
+                int l = InTex[idx + int2(x - 1, y - 1)];
+                count += 0 < l;
+            }
+        label *= saturate(6 - count);
+    }
+    OutTex[idx] = label;
 }
 
 [numthreads(8, 1, 1)]

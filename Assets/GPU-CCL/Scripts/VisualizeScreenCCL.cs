@@ -17,7 +17,7 @@ public class VisualizeScreenCCL : MonoBehaviour
             CreateScreenTex(source);
         ccl.Compute(source);
         ccl.BuildBlobs();
-        Graphics.CopyTexture(source, screenTex);
+        Graphics.Blit(source, screenTex);
         visualizer.SetTexture("_LabelTex", ccl.output);
         Graphics.Blit(source, destination, visualizer);
     }

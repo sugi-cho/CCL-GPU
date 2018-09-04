@@ -28,6 +28,7 @@ public class CCL : MonoBehaviour
     public Rect[] blobs { get; private set; }
     RenderTexture binaryTex;
     RenderTexture[] labelTexes;
+    RenderTexture edgedTex;
     public RenderTexture output;
 
     public void Compute(Texture source)
@@ -72,6 +73,9 @@ public class CCL : MonoBehaviour
 
             labelTexes[i] = labelTex;
         }
+        edgedTex = new RenderTexture(width, height, 0, RenderTextureFormat.RFloat);
+        edgedTex.enableRandomWrite = true;
+        edgedTex.Create();
         output = new RenderTexture(width, height, 0, RenderTextureFormat.RFloat);
         output.enableRandomWrite = true;
         output.filterMode = FilterMode.Point;
@@ -120,8 +124,6 @@ public class CCL : MonoBehaviour
         var kernel = cs.FindKernel("updateLabel");
         cs.SetTexture(kernel, "InTex", labelTexes[0]);
         cs.SetTexture(kernel, "OutTex", labelTexes[1]);
-        cs.SetInt("texWidth", width);
-        cs.SetInt("texHeight", height);
         cs.Dispatch(kernel, width / 8, height / 8, 1);
 
         SwapArray(labelTexes);
@@ -152,15 +154,26 @@ public class CCL : MonoBehaviour
         cs.Dispatch(kernel, width / 8, height / 8, 1);
     }
 
+    void Edging(RenderTexture rt0, RenderTexture rt1)
+    {
+        SwapArray(labelTexes);
+        var kernel = cs.FindKernel("edging");
+        cs.SetTexture(kernel, "InTex", rt0);
+        cs.SetTexture(kernel, "OutTex", rt1);
+        cs.Dispatch(kernel, width / 8, height / 8, 1);
+    }
+
     int CountLabels(RenderTexture labelTex)
     {
+        Edging(labelTex, edgedTex);
+
         labelAppendBuffer.SetCounterValue(0);
         var kernel = cs.FindKernel("clearLabelFlag");
         cs.SetBuffer(kernel, "LabelFlag", labelFlagBuffer);
         cs.Dispatch(kernel, width * height / 8, 1, 1);
 
         kernel = cs.FindKernel("setLabelFlag");
-        cs.SetTexture(kernel, "InTex", labelTex);
+        cs.SetTexture(kernel, "InTex", edgedTex);
         cs.SetBuffer(kernel, "LabelFlag", labelFlagBuffer);
         cs.Dispatch(kernel, width / 8, height / 8, 1);
 
@@ -191,7 +204,7 @@ public class CCL : MonoBehaviour
             pointAppendBuffer.SetCounterValue(0);
 
             var kernel = cs.FindKernel("getPointFromLabel");
-            cs.SetTexture(kernel, "InTex", output);
+            cs.SetTexture(kernel, "InTex", edgedTex);
             cs.SetBuffer(kernel, "PointAppend", pointAppendBuffer);
             cs.SetInt("targetLabel", labels[i]);
             cs.Dispatch(kernel, width / 8, height / 8, 1);

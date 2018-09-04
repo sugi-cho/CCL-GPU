@@ -228,8 +228,8 @@ MonoBehaviour:
   cs: {fileID: 7200000, guid: 7d0be38323110254aa0efac4c5f9cfdf, type: 3}
   binarization: {fileID: 2100000, guid: b2a800e9488fa154fa748030a9335eff, type: 2}
   threshold: 0.5
-  width: 256
-  height: 256
+  width: 512
+  height: 512
   maxBlobs: 128
   numLabels: 0
   numBlobs: 0
