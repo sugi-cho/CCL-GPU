@@ -84,7 +84,7 @@ public class CCL : MonoBehaviour
         labelFlagBuffer = new ComputeBuffer(width * height, sizeof(int));
         labelAppendBuffer = new ComputeBuffer(width * height, sizeof(int), ComputeBufferType.Append);
         labelAppendBuffer.SetCounterValue(0);
-        pointAppendBuffer = new ComputeBuffer(width * height, sizeof(float) * 2, ComputeBufferType.Append);
+        pointAppendBuffer = new ComputeBuffer(width * height, sizeof(int) * 3, ComputeBufferType.Append);
         pointAppendBuffer.SetCounterValue(0);
         countBuffer = new ComputeBuffer(1, sizeof(int), ComputeBufferType.IndirectArguments);
         countData = new[] { 0 };
@@ -182,7 +182,6 @@ public class CCL : MonoBehaviour
         cs.SetBuffer(kernel, "LabelAppend", labelAppendBuffer);
         cs.Dispatch(kernel, width * height / 8, 1, 1);
 
-        countBuffer.SetData(countData);
         ComputeBuffer.CopyCount(labelAppendBuffer, countBuffer, 0);
         countBuffer.GetData(countData);
 
@@ -195,38 +194,50 @@ public class CCL : MonoBehaviour
         numBlobs = Mathf.Min(maxBlobs, numLabels);
         labelAppendBuffer.GetData(labels, 0, 0, numBlobs);
 
-        var minX = 1f;
-        var minY = 1f;
-        var maxX = 0f;
-        var maxY = 0f;
+        pointAppendBuffer.SetCounterValue(0);
+
+        var kernel = cs.FindKernel("getLabeledPoint");
+        cs.SetTexture(kernel, "InTex", edgedTex);
+        cs.SetBuffer(kernel, "PointAppend", pointAppendBuffer);
+        cs.Dispatch(kernel, width / 8, height / 8, 1);
+
+        ComputeBuffer.CopyCount(pointAppendBuffer, countBuffer, 0);
+        countBuffer.GetData(countData);
+
+        var numPoints = countData[0];
+        pointAppendBuffer.GetData(pointData, 0, 0, numPoints);
+
+        for (var i = 0; i < numBlobs; i++)
+            blobs[i].x = -1f;
+
+        for (var i = 0; i < numPoints; i++)
+        {
+            var point = pointData[i];
+            var blobIdx = System.Array.IndexOf(labels, point.label);
+            var blob = blobs[blobIdx];
+
+            if (blobs[blobIdx].x == -1f)
+            {
+                blob.x = point.x;
+                blob.y = point.y;
+                blob.width = 0;
+                blob.height = 0;
+            }
+            else
+            {
+                blob.xMin = Mathf.Min(blob.xMin, point.x);
+                blob.yMin = Mathf.Min(blob.yMin, point.y);
+                blob.xMax = Mathf.Max(blob.xMax, point.x);
+                blob.yMax = Mathf.Max(blob.yMax, point.y);
+            }
+            blobs[blobIdx] = blob;
+        }
         for (var i = 0; i < numBlobs; i++)
         {
-            pointAppendBuffer.SetCounterValue(0);
-
-            var kernel = cs.FindKernel("getPointFromLabel");
-            cs.SetTexture(kernel, "InTex", edgedTex);
-            cs.SetBuffer(kernel, "PointAppend", pointAppendBuffer);
-            cs.SetInt("targetLabel", labels[i]);
-            cs.Dispatch(kernel, width / 8, height / 8, 1);
-
-            countBuffer.SetData(countData);
-            ComputeBuffer.CopyCount(pointAppendBuffer, countBuffer, 0);
-            countBuffer.GetData(countData);
-
-            var numPoints = countData[0];
-            pointAppendBuffer.GetData(pointData, 0, 0, numPoints);
-            minX = minY = 1f;
-            maxX = maxY = 0f;
-
-            for (var j = 0; j < numPoints; j++)
-            {
-                var point = pointData[j];
-                minX = Mathf.Min(minX, (float)point.x / width);
-                minY = Mathf.Min(minY, (float)point.y / height);
-                maxX = Mathf.Max(maxX, (float)(point.x + 1) / width);
-                maxY = Mathf.Max(maxY, (float)(point.y + 1) / height);
-            }
-            blobs[i] = Rect.MinMaxRect(minX, minY, maxX, maxY);
+            blobs[i].x /= width;
+            blobs[i].y /= height;
+            blobs[i].width /= width;
+            blobs[i].height /= height;
         }
     }
 
@@ -239,6 +250,7 @@ public class CCL : MonoBehaviour
 
     struct Point
     {
+        public int label;
         public int x;
         public int y;
     }

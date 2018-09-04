@@ -6,20 +6,25 @@
 #pragma kernel clearLabelFlag
 #pragma kernel setLabelFlag
 #pragma kernel countLabel
-#pragma kernel getPointFromLabel
+#pragma kernel getLabeledPoint
+
+struct pointData
+{
+    int label;
+    int2 pos;
+};
 
 Texture2D<float> InTex;
 RWTexture2D<float> OutTex;
 
 RWStructuredBuffer<int> LabelFlag;
 AppendStructuredBuffer<int> LabelAppend;
-AppendStructuredBuffer<int2> PointAppend;
+AppendStructuredBuffer<pointData> PointAppend;
 
 float threshold;
 uint texWidth;
 uint texHeight;
 int numLabels;
-int targetLabel;
 
 [numthreads(8, 8, 1)]
 void buildLabel(uint3 id : SV_DispatchThreadID)
@@ -133,9 +138,14 @@ void countLabel(uint3 id : SV_DispatchThreadID)
 }
 
 [numthreads(8, 8, 1)]
-void getPointFromLabel(uint3 id : SV_DispatchThreadID)
+void getLabeledPoint(uint3 id : SV_DispatchThreadID)
 {
     uint2 idx = id.xy;
-    if (InTex[idx] == targetLabel)
-        PointAppend.Append(idx);
+    if (0 < InTex[idx])
+    {
+        pointData data;
+        data.label = InTex[idx];
+        data.pos = idx;
+        PointAppend.Append(data);
+    }
 }
