@@ -2,19 +2,26 @@
 using System.Collections.Generic;
 using UnityEngine;
 
-[RequireComponent(typeof(Camera))]
-public class VisualizeScreenCCL : MonoBehaviour
-{
+public class WebCamCCL : MonoBehaviour {
 
+    public int width = 640;
+    public int height = 480;
     public Material visualizer;
     public CCL ccl;
+    WebCamTexture webcamTex;
+
+	// Use this for initialization
+	void Start () {
+        webcamTex = new WebCamTexture(width, height);
+        webcamTex.Play();
+	}
 
     private void OnRenderImage(RenderTexture source, RenderTexture destination)
     {
-        ccl.Compute(source);
+        ccl.Compute(webcamTex);
         ccl.BuildBlobs();
         visualizer.SetTexture("_LabelTex", ccl.output);
-        Graphics.Blit(source, destination, visualizer);
+        Graphics.Blit(webcamTex, destination, visualizer);
     }
 
     private void OnGUI()

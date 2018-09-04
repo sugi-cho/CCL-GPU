@@ -214,23 +214,26 @@ public class CCL : MonoBehaviour
         {
             var point = pointData[i];
             var blobIdx = System.Array.IndexOf(labels, point.label);
-            var blob = blobs[blobIdx];
+            if (0 <= blobIdx)
+            {
+                var blob = blobs[blobIdx];
 
-            if (blobs[blobIdx].x == -1f)
-            {
-                blob.x = point.x;
-                blob.y = point.y;
-                blob.width = 0;
-                blob.height = 0;
+                if (blobs[blobIdx].x == -1f)
+                {
+                    blob.x = point.x;
+                    blob.y = point.y;
+                    blob.width = 0;
+                    blob.height = 0;
+                }
+                else
+                {
+                    blob.xMin = Mathf.Min(blob.xMin, point.x);
+                    blob.yMin = Mathf.Min(blob.yMin, point.y);
+                    blob.xMax = Mathf.Max(blob.xMax, point.x);
+                    blob.yMax = Mathf.Max(blob.yMax, point.y);
+                }
+                blobs[blobIdx] = blob;
             }
-            else
-            {
-                blob.xMin = Mathf.Min(blob.xMin, point.x);
-                blob.yMin = Mathf.Min(blob.yMin, point.y);
-                blob.xMax = Mathf.Max(blob.xMax, point.x);
-                blob.yMax = Mathf.Max(blob.yMax, point.y);
-            }
-            blobs[blobIdx] = blob;
         }
         for (var i = 0; i < numBlobs; i++)
         {
