@@ -2,8 +2,17 @@
 
 Connected component labeling (CCL) using Unity ComputeShader
 
-![screenshot](ss.png)
+- Implemented with reference to this slide
+- https://www.slideshare.net/QuentinKang/fast-cclconnected-component-labeling-with-gpu
 
-CUDAの実装とか、読みながら作ってみたけど、SharedMemoryを使って最適化するとことか良く分らなかった
+## Captures
 
-Labeling自体はそれなりに早く処理できるけど、BlobDataを作るのにデータをCPU側に渡したり、かたまり毎のポイントの処理をCPUで行っているので、ボトルネックになっている感じ
+![screenshot](ccl.gif)
+
+labeling step by step
+
+---
+
+![camCCL](camCCL.gif)
+
+label via brightness

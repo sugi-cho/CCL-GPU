@@ -4,257 +4,192 @@ using UnityEngine;
 
 public class CCL : MonoBehaviour
 {
-    public ComputeShader cs;
-    public Material binarization;
-    [Header("calculation params")]
-    [Range(0f, 1f)]
-    public float threshold = 0.5f;
+    public ComputeShader cclCompute;
+
     public int width = 512;
     public int height = 512;
-    public int maxBlobs = 512;
+    public int numMaxLabels = 32;
+    public int numPerLabel = 128;
 
-    ComputeBuffer labelFlagBuffer;
+    public Material souceToInput;
+    public Material visualizer;
+    public Material blobMat;
+
+    public Camera blobDrawer;
+    MaterialPropertyBlock mpb;
+
+    [SerializeField] RenderTexture inputTex;
+    [SerializeField] RenderTexture labelTex;
+
+    ComputeBuffer labelFlgBuffer;
     ComputeBuffer labelAppendBuffer;
-    ComputeBuffer pointAppendBuffer;
-    ComputeBuffer countBuffer;
-    int[] countData;
-    Point[] pointData;
-    int[] labels;
-    bool labelCounted;
+    ComputeBuffer labelArgBuffer;
+    ComputeBuffer labelDataAppendBuffer;
+    ComputeBuffer labelDataBuffer;
+    ComputeBuffer accumeLabelDataBuffer;
 
-    [Header("output data")]
-    public int numLabels;
-    public int numBlobs;
-    public Rect[] blobs { get; private set; }
-    RenderTexture binaryTex;
-    RenderTexture[] labelTexes;
-    RenderTexture edgedTex;
-    public RenderTexture output;
+    [SerializeField] uint[] args;
+    [SerializeField] LabelData[] labelData;
 
-    public void Compute(Texture source)
+    Mesh quad
     {
-        if (binaryTex == null)
-            Init();
-        Binarization(source);
-        BuildLabel();
-        MargeLabel();
-        MargeBoundary();
-        MargeBoundary();
-        //1回でマージできない時があるから念のため
-        Graphics.CopyTexture(labelTexes[1], output);
-        labelCounted = false;
-    }
-    public int CountLabels()
-    {
-        return numLabels = CountLabels(output);
-    }
-    public void BuildBlobs()
-    {
-        if (!labelCounted)
-            numLabels = CountLabels();
-        BuildBlobs(numLabels);
-    }
-
-    void Init()
-    {
-        width = Mathf.ClosestPowerOfTwo(Mathf.Max(width, 8));
-        height = Mathf.ClosestPowerOfTwo(Mathf.Max(height, 8));
-
-        binaryTex = new RenderTexture(width, height, 0, RenderTextureFormat.RFloat);
-        binaryTex.enableRandomWrite = true;
-        binaryTex.wrapMode = TextureWrapMode.Clamp;
-        binaryTex.Create();
-        labelTexes = new RenderTexture[2];
-        for (var i = 0; i < 2; i++)
+        get
         {
-            var labelTex = new RenderTexture(width, height, 0, RenderTextureFormat.RFloat);
-            labelTex.enableRandomWrite = true;
-            labelTex.Create();
-
-            labelTexes[i] = labelTex;
+            if (_q == null)
+            {
+                var go = GameObject.CreatePrimitive(PrimitiveType.Quad);
+                _q = go.GetComponent<MeshFilter>().sharedMesh;
+                Destroy(go);
+            }
+            return _q;
         }
-        edgedTex = new RenderTexture(width, height, 0, RenderTextureFormat.RFloat);
-        edgedTex.enableRandomWrite = true;
-        edgedTex.Create();
-        output = new RenderTexture(width, height, 0, RenderTextureFormat.RFloat);
-        output.enableRandomWrite = true;
-        output.filterMode = FilterMode.Point;
-        output.Create();
+    }
+    Mesh _q;
 
-        labelFlagBuffer = new ComputeBuffer(width * height, sizeof(int));
-        labelAppendBuffer = new ComputeBuffer(width * height, sizeof(int), ComputeBufferType.Append);
-        labelAppendBuffer.SetCounterValue(0);
-        pointAppendBuffer = new ComputeBuffer(width * height, sizeof(int) * 3, ComputeBufferType.Append);
-        pointAppendBuffer.SetCounterValue(0);
-        countBuffer = new ComputeBuffer(1, sizeof(int), ComputeBufferType.IndirectArguments);
-        countData = new[] { 0 };
-        pointData = new Point[width * height];
+    [ContextMenu("test")]
+    void test()
+    {
+        Debug.Log(1 >> 1);
+    }
 
-        blobs = new Rect[maxBlobs];
-        labels = new int[maxBlobs];
+    [System.Serializable]
+    public struct LabelData
+    {
+        public float size;
+        public Vector2 pos;
+    }
+
+    private void Start()
+    {
+        inputTex = new RenderTexture(width, height, 16, RenderTextureFormat.R8);
+        inputTex.Create();
+        labelTex = new RenderTexture(width, height, 0, RenderTextureFormat.RFloat);
+        labelTex.filterMode = FilterMode.Point;
+        labelTex.enableRandomWrite = true;
+        labelTex.Create();
+
+        labelFlgBuffer = new ComputeBuffer(width * height, sizeof(int));
+        labelAppendBuffer = new ComputeBuffer(numMaxLabels, sizeof(int), ComputeBufferType.Append);
+        labelArgBuffer = new ComputeBuffer(1, 5 * sizeof(uint), ComputeBufferType.IndirectArguments);
+        labelDataAppendBuffer = new ComputeBuffer(numPerLabel, sizeof(int) * 3, ComputeBufferType.Append);
+        labelDataBuffer = new ComputeBuffer(numPerLabel * numMaxLabels, sizeof(float) * 3);
+        accumeLabelDataBuffer = new ComputeBuffer(numMaxLabels, sizeof(float) * 3);
+        args = new uint[] { quad.GetIndexCount(0), 0, 0, 0, 0 };
+        labelData = new LabelData[numMaxLabels];
+        mpb = new MaterialPropertyBlock();
+
+        InvokeRepeating("DetectBlobs", 1f / 30f, 1f / 30f);
     }
 
     private void OnDestroy()
     {
-        new List<ComputeBuffer>(new[] { labelFlagBuffer, labelAppendBuffer, pointAppendBuffer, countBuffer })
-            .ForEach(b => b.Dispose());
-        new List<RenderTexture>(new[] { binaryTex, labelTexes[0], labelTexes[1] })
+        new List<RenderTexture>(new[] { inputTex, labelTex })
             .ForEach(rt => rt.Release());
+        new List<ComputeBuffer>(new[] { labelFlgBuffer, labelAppendBuffer, labelArgBuffer, labelDataAppendBuffer, labelDataBuffer, accumeLabelDataBuffer })
+            .ForEach(bf => bf.Dispose());
     }
 
-    void Binarization(Texture source)
+    public void DetectBlobs()
     {
-        source.wrapMode = TextureWrapMode.Clamp;
-        binarization.SetFloat("_Threshold", threshold);
-        Graphics.Blit(source, binaryTex, binarization);
-    }
+        var kernel = cclCompute.FindKernel("init");
+        cclCompute.SetTexture(kernel, "inTex", inputTex);
+        cclCompute.SetTexture(kernel, "labelTex", labelTex);
+        cclCompute.SetInt("numMaxLabel", numMaxLabels);
+        cclCompute.SetInt("texWidth", width);
+        cclCompute.SetInt("texHeight", height);
+        cclCompute.Dispatch(kernel, width / 8, height / 8, 1);
 
-    void BuildLabel()
-    {
-        var kernel = cs.FindKernel("buildLabel");
-        cs.SetTexture(kernel, "InTex", binaryTex);
-        cs.SetTexture(kernel, "OutTex", labelTexes[1]);
-        cs.SetInt("texWidth", width);
-        cs.Dispatch(kernel, width / 8, height / 8, 1);
-    }
+        kernel = cclCompute.FindKernel("columnWiseLabel");
+        cclCompute.SetTexture(kernel, "labelTex", labelTex);
+        cclCompute.Dispatch(kernel, width / 8, 1, 1);
 
-    void MargeLabel()
-    {
-        SwapArray(labelTexes);
-        var kernel = cs.FindKernel("updateLabel");
-        cs.SetTexture(kernel, "InTex", labelTexes[0]);
-        cs.SetTexture(kernel, "OutTex", labelTexes[1]);
-        cs.Dispatch(kernel, width / 8, height / 8, 1);
+        var itr = Mathf.Log(width, 2);
+        var div = 2;
+        for (var i = 0; i < itr; i++)
+        {
+            kernel = cclCompute.FindKernel("mergeLabels");
+            cclCompute.SetTexture(kernel, "labelTex", labelTex);
+            cclCompute.SetInt("div", div);
 
-        SwapArray(labelTexes);
-        kernel = cs.FindKernel("margeLabel");
-        cs.SetTexture(kernel, "InTex", labelTexes[0]);
-        cs.SetTexture(kernel, "OutTex", labelTexes[1]);
-        cs.SetInt("texWidth", width);
-        cs.SetInt("texHeight", height);
-        cs.Dispatch(kernel, width / 8, height / 8, 1);
-    }
+            cclCompute.Dispatch(kernel, Mathf.Max(width / (2 << i) / 8, 1), 1, 1);
+            div *= 2;
+        }
 
-    void MargeBoundary()
-    {
-        SwapArray(labelTexes);
-        var kernel = cs.FindKernel("margeBoundary");
-        cs.SetTexture(kernel, "InTex", labelTexes[0]);
-        cs.SetTexture(kernel, "OutTex", labelTexes[1]);
-        cs.SetInt("texWidth", width);
-        cs.SetInt("texHeight", height);
-        cs.Dispatch(kernel, width / 8, height / 8, 1);
+        kernel = cclCompute.FindKernel("clearLabelFlag");
+        cclCompute.SetTexture(kernel, "labelTex", labelTex);
+        cclCompute.SetBuffer(kernel, "labelBuffer", labelAppendBuffer);
+        cclCompute.SetBuffer(kernel, "labelFlg", labelFlgBuffer);
+        cclCompute.Dispatch(kernel, width * height / 8, 1, 1);
 
-        SwapArray(labelTexes);
-        kernel = cs.FindKernel("margeLabel");
-        cs.SetTexture(kernel, "InTex", labelTexes[0]);
-        cs.SetTexture(kernel, "OutTex", labelTexes[1]);
-        cs.SetInt("texWidth", width);
-        cs.SetInt("texHeight", height);
-        cs.Dispatch(kernel, width / 8, height / 8, 1);
-    }
-
-    void Edging(RenderTexture rt0, RenderTexture rt1)
-    {
-        SwapArray(labelTexes);
-        var kernel = cs.FindKernel("edging");
-        cs.SetTexture(kernel, "InTex", rt0);
-        cs.SetTexture(kernel, "OutTex", rt1);
-        cs.Dispatch(kernel, width / 8, height / 8, 1);
-    }
-
-    int CountLabels(RenderTexture labelTex)
-    {
-        Edging(labelTex, edgedTex);
+        kernel = cclCompute.FindKernel("setRootLabel");
+        cclCompute.SetTexture(kernel, "labelTex", labelTex);
+        cclCompute.SetBuffer(kernel, "labelFlg", labelFlgBuffer);
+        cclCompute.Dispatch(kernel, width / 8, height / 8, 1);
 
         labelAppendBuffer.SetCounterValue(0);
-        var kernel = cs.FindKernel("clearLabelFlag");
-        cs.SetBuffer(kernel, "LabelFlag", labelFlagBuffer);
-        cs.Dispatch(kernel, width * height / 8, 1, 1);
+        kernel = cclCompute.FindKernel("countLabel");
+        cclCompute.SetBuffer(kernel, "labelFlg", labelFlgBuffer);
+        cclCompute.SetBuffer(kernel, "labelAppend", labelAppendBuffer);
+        cclCompute.Dispatch(kernel, width * height / 8, 1, 1);
 
-        kernel = cs.FindKernel("setLabelFlag");
-        cs.SetTexture(kernel, "InTex", edgedTex);
-        cs.SetBuffer(kernel, "LabelFlag", labelFlagBuffer);
-        cs.Dispatch(kernel, width / 8, height / 8, 1);
+        kernel = cclCompute.FindKernel("clearLabelData");
+        cclCompute.SetBuffer(kernel, "labelDataBuffer", labelDataBuffer);
+        cclCompute.Dispatch(kernel, numPerLabel * numMaxLabels / 8, 1, 1);
 
-        kernel = cs.FindKernel("countLabel");
-        cs.SetBuffer(kernel, "LabelFlag", labelFlagBuffer);
-        cs.SetBuffer(kernel, "LabelAppend", labelAppendBuffer);
-        cs.Dispatch(kernel, width * height / 8, 1, 1);
-
-        ComputeBuffer.CopyCount(labelAppendBuffer, countBuffer, 0);
-        countBuffer.GetData(countData);
-
-        labelCounted = true;
-        return countData[0];
-    }
-
-    void BuildBlobs(int numLabels)
-    {
-        numBlobs = Mathf.Min(maxBlobs, numLabels);
-        labelAppendBuffer.GetData(labels, 0, 0, numBlobs);
-
-        pointAppendBuffer.SetCounterValue(0);
-
-        var kernel = cs.FindKernel("getLabeledPoint");
-        cs.SetTexture(kernel, "InTex", edgedTex);
-        cs.SetBuffer(kernel, "PointAppend", pointAppendBuffer);
-        cs.Dispatch(kernel, width / 8, height / 8, 1);
-
-        ComputeBuffer.CopyCount(pointAppendBuffer, countBuffer, 0);
-        countBuffer.GetData(countData);
-
-        var numPoints = countData[0];
-        pointAppendBuffer.GetData(pointData, 0, 0, numPoints);
-
-        for (var i = 0; i < numBlobs; i++)
-            blobs[i].x = -1f;
-
-        for (var i = 0; i < numPoints; i++)
+        for (var i = 0; i < numMaxLabels; i++)
         {
-            var point = pointData[i];
-            var blobIdx = System.Array.IndexOf(labels, point.label);
-            if (0 <= blobIdx)
-            {
-                var blob = blobs[blobIdx];
+            cclCompute.SetInt("labelIdx", i);
+            cclCompute.SetInt("numPerLabel", numPerLabel);
 
-                if (blobs[blobIdx].x == -1f)
-                {
-                    blob.x = point.x;
-                    blob.y = point.y;
-                    blob.width = 0;
-                    blob.height = 0;
-                }
-                else
-                {
-                    blob.xMin = Mathf.Min(blob.xMin, point.x);
-                    blob.yMin = Mathf.Min(blob.yMin, point.y);
-                    blob.xMax = Mathf.Max(blob.xMax, point.x);
-                    blob.yMax = Mathf.Max(blob.yMax, point.y);
-                }
-                blobs[blobIdx] = blob;
-            }
+            labelDataAppendBuffer.SetCounterValue(0);
+            kernel = cclCompute.FindKernel("clearLabelData");
+            cclCompute.SetBuffer(kernel, "labelDataBuffer", labelDataAppendBuffer);
+            cclCompute.Dispatch(kernel, numPerLabel / 8, 1, 1);
+
+            kernel = cclCompute.FindKernel("appendLabelData");
+            cclCompute.SetBuffer(kernel, "labelBuffer", labelAppendBuffer);
+            cclCompute.SetTexture(kernel, "labelTex", labelTex);
+            cclCompute.SetBuffer(kernel, "labelDataAppend", labelDataAppendBuffer);
+            cclCompute.Dispatch(kernel, width / 8, height / 8, 1);
+
+            kernel = cclCompute.FindKernel("setLabelData");
+            cclCompute.SetBuffer(kernel, "inLabelDataBuffer", labelDataAppendBuffer);
+            cclCompute.SetBuffer(kernel, "labelDataBuffer", labelDataBuffer);
+            cclCompute.Dispatch(kernel, numPerLabel / 8, 1, 1);
         }
-        for (var i = 0; i < numBlobs; i++)
-        {
-            blobs[i].x /= width;
-            blobs[i].y /= height;
-            blobs[i].width /= width;
-            blobs[i].height /= height;
-        }
+
+        kernel = cclCompute.FindKernel("clearLabelData");
+        cclCompute.SetBuffer(kernel, "labelDataBuffer", accumeLabelDataBuffer);
+        cclCompute.Dispatch(kernel, numMaxLabels / 8, 1, 1);
+
+        kernel = cclCompute.FindKernel("buildBlobData");
+        cclCompute.SetBuffer(kernel, "inLabelDataBuffer", labelDataBuffer);
+        cclCompute.SetBuffer(kernel, "labelDataBuffer", accumeLabelDataBuffer);
+        cclCompute.Dispatch(kernel, 1, numMaxLabels, 1);
+
+        ComputeBuffer.CopyCount(labelAppendBuffer, labelArgBuffer, sizeof(uint));
+        labelArgBuffer.GetData(args);
+        accumeLabelDataBuffer.GetData(labelData);
     }
 
-    void SwapArray<T>(T[] array)
+    Vector4 prop;
+    private void Update()
     {
-        var tmp = array[0];
-        array[0] = array[1];
-        array[1] = tmp;
+        prop.x = 1f / width;
+        prop.y = 1f / height;
+        prop.z = blobDrawer.orthographicSize;
+        prop.w = blobDrawer.aspect * prop.z;
+        mpb.SetVector("_Prop", prop);
+        mpb.SetBuffer("_LabelBuffer", accumeLabelDataBuffer);
+        Graphics.DrawMeshInstancedIndirect(
+            quad, 0, blobMat, quad.bounds, labelArgBuffer, 0, mpb,
+            UnityEngine.Rendering.ShadowCastingMode.Off, false, 0, blobDrawer);
     }
 
-    struct Point
+    private void OnRenderImage(RenderTexture source, RenderTexture destination)
     {
-        public int label;
-        public int x;
-        public int y;
+        Graphics.Blit(source, inputTex, souceToInput);
+        visualizer.SetTexture("_LabelTex", labelTex);
+        Graphics.Blit(source, destination, visualizer);
     }
 }

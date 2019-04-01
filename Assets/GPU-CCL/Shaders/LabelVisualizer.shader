@@ -47,10 +47,11 @@
 
 			fixed4 frag (v2f i) : SV_Target
 			{
-				fixed4 col = tex2D(_MainTex, i.uv);
+				fixed4 col = tex2D(_MainTex, i.uv).r;
+				col *= col;
 				half label = tex2D(_LabelTex, i.uv);
 				half3 overlay = rand3(label * 0.001);
-				col.rgb = lerp(col.rgb, overlay, saturate(label));
+				col.rgb = lerp(col.rgb, overlay, 0 < label);
 				return col;
 			}
 			ENDCG
