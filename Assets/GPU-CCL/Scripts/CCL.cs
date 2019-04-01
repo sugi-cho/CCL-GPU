@@ -75,6 +75,7 @@ public class CCL : MonoBehaviour
         labelDataBuffer = new ComputeBuffer(numPerLabel * numMaxLabels, sizeof(float) * 3);
         accumeLabelDataBuffer = new ComputeBuffer(numMaxLabels, sizeof(float) * 3);
         args = new uint[] { quad.GetIndexCount(0), 0, 0, 0, 0 };
+        labelArgBuffer.SetData(args);
         labelData = new LabelData[numMaxLabels];
         mpb = new MaterialPropertyBlock();
 
@@ -175,6 +176,8 @@ public class CCL : MonoBehaviour
     Vector4 prop;
     private void Update()
     {
+        if (blobDrawer == null)
+            return;
         prop.x = 1f / width;
         prop.y = 1f / height;
         prop.z = blobDrawer.orthographicSize;
